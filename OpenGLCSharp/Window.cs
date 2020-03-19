@@ -8,11 +8,13 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization.Formatters.Binary;
 using OpenGLCSharp.Common;
 using OpenTK;
 using OpenTK.Graphics;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Input;
+using SharedProject.SharedComponents;
 using static OpenGLCSharp.Program;
 
 #endregion
@@ -22,10 +24,10 @@ namespace OpenGLCSharp {
     public class Window : GameWindow {
         private Vertex[] _vertices = {
             // Position                Texture coordinates
-            new Vertex( 0.5f,  0.5f,  0.5f, 1.0f, 1.0f ), // top right
-            new Vertex( 0.5f,  -0.5f, 0.5f, 1.0f, 0.0f ), // bottom right
-            new Vertex( -0.5f, -0.5f, 0.5f, 0.0f, 0.0f ), // bottom left
-            new Vertex( -0.5f, 0.5f,  0.5f, 0.0f, 1.0f ), // top left  
+            new Vertex( 0.5f,  0.5f,  0.5f,  1.0f, 1.0f ), // top right
+            new Vertex( 0.5f,  -0.5f, 0.5f,  1.0f, 0.0f ), // bottom right
+            new Vertex( -0.5f, -0.5f, 0.5f,  0.0f, 0.0f ), // bottom left
+            new Vertex( -0.5f, 0.5f,  0.5f,  0.0f, 1.0f ), // top left  
             new Vertex( 0.5f,  0.5f,  -0.5f, 1.0f, 1.0f ), // top right   back
             new Vertex( 0.5f,  -0.5f, -0.5f, 1.0f, 0.0f ), // bottom right  back
             new Vertex( -0.5f, -0.5f, -0.5f, 0.0f, 0.0f ), // bottom left   back
@@ -72,7 +74,7 @@ namespace OpenGLCSharp {
 
         //ArrayBuffer _mainBuffer;
 
-        private ArrayBuffer[] _objectBuffers = new ArrayBuffer[10];
+        //private ArrayBuffer[] _objectBuffers = new ArrayBuffer[10];
 
         private SceneChunk  sceneChunk;
         private FrameBuffer Buffer;
@@ -112,16 +114,34 @@ namespace OpenGLCSharp {
             //this._mainBuffer.ShaderSetup( ref this._shader, new[] { ( "aPosition", 3 ), ( "aTexCoord", 2 ) } );
             //this._mainBuffer.TextureSetupSetup( new[] { ResourcePath + "Resources\\container.png", ResourcePath + "Resources\\awesomeface.png" } );
 
-            Random r = new Random();
+            //Random r = new Random();
+            //
+            //for ( int i = 0; i < this._objectBuffers.Length; i++ ) {
+            //    this._objectBuffers[i]                       =  new ArrayBuffer( ref this._vertices, ref this._indices );
+            //    this._objectBuffers[i].TransformationsMatrix *= Matrix4.CreateTranslation( r.Next( 0, 20 ), r.Next( 0, 20 ), r.Next( 0, 20 ) );
+            //    this._objectBuffers[i].ShaderSetup( ref this._shader, new[] { ( "aPosition", 3 ), ( "aTexCoord", 2 ) } );
+            //    this._objectBuffers[i].TextureSetupSetup( new[] { ResourcePath + "Resources\\container.png", ResourcePath + "Resources\\awesomeface.png" } );
+            //}
+            var       bf = new BinaryFormatter();
+            var       fs = File.Open( @"C:\Users\admin\Desktop\untitled.bmf", FileMode.Open );
+            SceneData sd = (SceneData) bf.Deserialize( fs );
+            fs.Close();
 
-            for ( int i = 0; i < this._objectBuffers.Length; i++ ) {
-                this._objectBuffers[i]                       =  new ArrayBuffer( ref this._vertices, ref this._indices );
-                this._objectBuffers[i].TransformationsMatrix *= Matrix4.CreateTranslation( r.Next( 0, 20 ), r.Next( 0, 20 ), r.Next( 0, 20 ) );
-                this._objectBuffers[i].ShaderSetup( ref this._shader, new[] { ( "aPosition", 3 ), ( "aTexCoord", 2 ) } );
-                this._objectBuffers[i].TextureSetupSetup( new[] { ResourcePath + "Resources\\container.png", ResourcePath + "Resources\\awesomeface.png" } );
+            List<ArrayBuffer> buffers = new List<ArrayBuffer>();
+
+            foreach ( var bufferInfo in sd.Meshes1 ) {
+                var vt = bufferInfo.Data;
+                var id = bufferInfo.Indices;
+
+                ArrayBuffer buf = new ArrayBuffer( ref vt, ref id);
+                buf.TransformationsMatrix = sd.TransFormMatrix;
+                buf.ShaderSetup( ref this._shader, new[] { ( "aPosition", 3 ), ( "aTexCoord", 2 ) } );   
+                buf.TextureSetupSetup( /*new[] { ResourcePath + "Resources\\container.png", ResourcePath + "Resources\\awesomeface.png" }*/  sd.TextureIdList.Select( x=> x.Item2 ).ToArray() );
+
+                buffers.Add( buf );
             }
 
-            this.sceneChunk = new SceneChunk( this._shader, this._objectBuffers, Vector3.Zero, Matrix4.Identity, this._camera );
+            this.sceneChunk = new SceneChunk( this._shader,buffers.ToArray(), Vector3.Zero, Matrix4.Identity, this._camera );
             this.sceneChunk.BeforeDraw += delegate(SceneChunk.DrawEventArgs args) {
                 args.Matrix *= Matrix4.Identity * Matrix4.CreateRotationX( (float) MathHelper.DegreesToRadians( this._time * 10 ) );
 
@@ -182,7 +202,7 @@ namespace OpenGLCSharp {
                 Exit();
             }
 
-            const float cameraSpeed = 1.5f;
+            const float cameraSpeed = 15f;
             const float sensitivity = 0.2f;
 
             if ( input.IsKeyDown( Key.W ) ) {

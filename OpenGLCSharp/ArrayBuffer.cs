@@ -7,11 +7,12 @@ using System.Threading.Tasks;
 using OpenGLCSharp.Common;
 using OpenTK;
 using OpenTK.Graphics.OpenGL4;
+using SharedProject.SharedComponents;
 
 namespace OpenGLCSharp {
     public class ArrayBuffer : IDisposable {
         public Vertex[]      Data                  { get; }
-        public uint[]        Indices               { get; }
+        public int[]        Indices               { get; }
         public Shader        Shader                { get; private set; }
         public Matrix4       TransformationsMatrix { get; set; }
         public List<Texture> Textures              { get; } = new List<Texture>();
@@ -21,7 +22,7 @@ namespace OpenGLCSharp {
         private int _vertexBufferObject;
         private int _vertexArrayObject;
 
-        public ArrayBuffer(ref Vertex[] data, ref uint[] indices) {
+        public ArrayBuffer(ref Vertex[] data, ref int[] indices) {
             this.Data             = data;
             this.Indices          = indices;
             TransformationsMatrix = Matrix4.Identity;

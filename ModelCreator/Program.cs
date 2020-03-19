@@ -3,14 +3,25 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization.Formatters.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Assimp;
+using OpenTK;
+using SharedProject.SharedComponents;
+using mat = SharedProject.SharedComponents.Material;
+using meshData = SharedProject.SharedComponents.MeshData;
 
 namespace ModelCreator {
-    class Program {
+    public static class Extentions {
+        public static OpenTK.Vector4 V(this  Color4D  color) => new OpenTK.Vector4( color.R, color.G, color.B, color.A );
+        public static OpenTK.Vector3 V(this  Vector3D vec)   => new OpenTK.Vector3( vec.X, vec.Y, vec.Z );
+        public static OpenTK.Vector2 VX(this Vector3D vec)   => new OpenTK.Vector2( vec.X, vec.Y );
+    }
 
+    class Program {
         static List<Mesh>     _meshes    = new List<Mesh>();
         static List<Material> _materials = new List<Material>();
 
@@ -144,121 +155,87 @@ namespace ModelCreator {
         #endregion
 
 
-        static void ProcessMesh(Assimp.Mesh mesh, Assimp.Scene scene) {
-            Mesh m = new Mesh();
+        static meshData ProcessMesh(Assimp.Mesh mesh, Assimp.Scene scene) {
+            Vector3[] post = mesh.Vertices.Select( x => x.V() ).ToArray();
+            Vector3[] norm = mesh.Normals.Select( x => x.V() ).ToArray();
+            Vector3[] tang = mesh.Tangents.Select( x => x.V() ).ToArray();
+            Vector2[] uves = mesh.TextureCoordinateChannels[0].Select( x => x.VX() ).ToArray();
+            int[]     inde = mesh.GetIndices();
 
-            for ( int i = 0; i < mesh.VertexCount; i++ ) {
-                if ( mesh.HasVertices ) {
-                    Vec3 vec3 = new Vec3( mesh.Vertices[i] );
-                    m.positions.Add( vec3 );
-                }
-                else {
-                    Console.WriteLine( "[" + i + "]: " + "No Vertices" );
-                }
+            var materialIndex = mesh.MaterialIndex;
 
-                if ( mesh.HasNormals ) {
-                    Vec3 normal = new Vec3( mesh.Normals[i] );
-                    m.normals.Add( normal );
-                }
-                else {
-                    Console.WriteLine( "[" + i + "]: " + "No Normals" );
-                }
-
-                if ( mesh.HasTangentBasis ) {
-                    Vec3 tangent = new Vec3( mesh.Tangents[i] );
-                    m.tangents.Add( tangent );
-                }
-                else {
-                    Console.WriteLine( "[" + i + "]: " + "No Tangents" );
-                }
-
-                if ( mesh.HasTextureCoords( 0 ) ) {
-                    Vec2 uv = new Vec2( mesh.TextureCoordinateChannels[0][i] );
-                    m.uvs.Add( uv );
-                }
-                else {
-                    Console.WriteLine( "[" + i + "]: " + "No TextureCoordinate" );
-                }
-            }
-
-            foreach ( Face f in mesh.Faces ) {
-                for ( int j = 0;
-                    j < f.IndexCount;
-                    j++ ) {
-                    m.indices.Add( f.Indices[j] );
-                }
-            }
-
-            m.materialIndex = mesh.MaterialIndex;
-            _meshes.Add( m );
+            return new meshData( post, inde, norm, tang, uves );
         }
 
-        static void ProcessNode(Node node, Scene scene) {
+        static IEnumerable<MeshData> ProcessNode(Node node, Scene scene) {
             for ( int i = 0; i < node.MeshCount; i++ ) {
-                Assimp.Mesh mesh = scene.Meshes[node.MeshIndices[i]];
-                ProcessMesh( mesh, scene );
+                var mesh = scene.Meshes[node.MeshIndices[i]];
+                yield return ProcessMesh( mesh, scene );
             }
 
             for ( int i = 0; i < node.ChildCount; i++ ) {
-                ProcessNode( node.Children[i], scene );
+                foreach ( var data in ProcessNode( node.Children[i], scene ) ) {
+                    yield return data;
+                }
             }
         }
 
-        static void ProcessMaterials(Scene scene, string directoryName) {
-            for ( int i = 0; i < scene.MaterialCount; i++ ) {
-                Material        mat      = new Material();
-                Assimp.Material material = scene.Materials[i];
-
+        static IEnumerable<mat> ProcessMaterials(Scene scene, string directoryName, Func<string, string, string> textureNotFoundCallback = default, bool forceUseDiffuseMap = true, bool forceUseNormalMap = true) {
+            foreach ( var material in scene.Materials ) {
                 var diffuse = material.ColorDiffuse;
-                mat.diffuse = new Vec3( diffuse.R, diffuse.G, diffuse.B );
 
-                var specular = material.ColorSpecular;
-                mat.specular = new Vec3( specular.R, specular.G, specular.B );
-
-                var emissive = material.ColorEmissive;
-                mat.emissive = new Vec3( emissive.R, emissive.G, emissive.B );
-
+                var   specular  = material.ColorSpecular;
+                var   emissive  = material.ColorEmissive;
                 float shininess = material.Shininess;
-                mat.shininess = shininess;
 
                 float shininessStrength = material.ShininessStrength;
 
-                mat.specular.x *= shininessStrength;
-                mat.specular.y *= shininessStrength;
-                mat.specular.z *= shininessStrength;
+                specular.R *= shininessStrength;
+                specular.G *= shininessStrength;
+                specular.B *= shininessStrength;
 
-                int numDiffuseMaps = material.GetMaterialTextureCount( TextureType.Diffuse );
-                int numNormalMaps  = material.GetMaterialTextureCount( TextureType.Normals );
+                string normalMapPath;
+                string diffuseMapPath;
 
-                if ( numDiffuseMaps > 0 ) {
+                if ( material.HasTextureDiffuse ) {
                     material.GetMaterialTexture( TextureType.Diffuse, 0, out var diffuseMapName );
-                    Console.WriteLine( diffuseMapName.FilePath );
 
-                    if ( !File.Exists( diffuseMapName.FilePath ) ) {
-                        //TODO: open new map
-                        //var a = new ModelWorkerEventArgs() { Args = diffuseMapName.FilePath, EventType = ModelWorkerEventArgs.EventArgsType.TextureNotExists, Context = directoryName };
-                        //this.OnActionCallback?.Invoke( this, a );
-                        //diffuseMapName.FilePath = a.Args.Replace( directoryName, "" );
+                    if ( File.Exists(directoryName+ diffuseMapName.FilePath ) ) {
+                        diffuseMapPath = directoryName + diffuseMapName.FilePath;
                     }
-
-                    mat.diffuseMapName = diffuseMapName.FilePath;
+                    else {
+                        diffuseMapPath = textureNotFoundCallback?.Invoke( diffuseMapName.FilePath, directoryName );
+                    }
+                }
+                else if ( forceUseDiffuseMap ) {
+                    diffuseMapPath = textureNotFoundCallback?.Invoke( nameof(diffuseMapPath), directoryName );
+                }
+                else {
+                    Console.WriteLine( "No Diffuse Map" );
+                    diffuseMapPath = default;
                 }
 
-                if ( numNormalMaps > 0 ) {
+                if ( material.HasTextureNormal ) {
                     material.GetMaterialTexture( TextureType.Normals, 0, out var normalMapName );
-                    Console.WriteLine( normalMapName.FilePath );
 
-                    if ( !File.Exists( normalMapName.FilePath ) ) {
-                        //TODO: Open Texture
-                        //var a = new ModelWorkerEventArgs() { Args = normalMapName.FilePath, EventType = ModelWorkerEventArgs.EventArgsType.TextureNotExists, Context = directoryName };
-                        //this.OnActionCallback?.Invoke( this, a );
-                        //normalMapName.FilePath = a.Args.Replace( directoryName, "" );
+                    if ( File.Exists(directoryName+ normalMapName.FilePath ) ) {
+                        normalMapPath = directoryName + normalMapName.FilePath;
                     }
-
-                    mat.normalMapName = normalMapName.FilePath;
+                    else {
+                        normalMapPath = textureNotFoundCallback?.Invoke( normalMapName.FilePath, directoryName );
+                    }
+                }
+                else if ( forceUseNormalMap ) {
+                    normalMapPath = textureNotFoundCallback?.Invoke( nameof(normalMapPath), directoryName );
+                }
+                else {
+                    Console.WriteLine( "No Normal Map" );
+                    normalMapPath = default;
                 }
 
-                _materials.Add( mat );
+                var materialNew = new mat( diffuse.V(), specular.V(), emissive.V(), shininess, diffuseMapPath, normalMapPath );
+
+                yield return materialNew;
             }
         }
 
@@ -281,142 +258,68 @@ namespace ModelCreator {
             //return material.GetBytes();
         }
 
+        [STAThread]
         static void Main(string[] args) {
-            var model = @"C:\0EE934262B1635B7\source\repos\OpenGLCSharp\3d we.obj";
-            int hf    = 0;
+            var model = @"C:\Users\admin\Desktop\untitled.fbx";
 
             string        directory = Path.GetDirectoryName( model );
             AssimpContext importer  = new AssimpContext();
 
             var scene = importer.ImportFile( model, PostProcessSteps.PreTransformVertices | PostProcessSteps.Triangulate | PostProcessSteps.GenerateNormals | PostProcessSteps.OptimizeMeshes | PostProcessSteps.OptimizeGraph | PostProcessSteps.JoinIdenticalVertices | PostProcessSteps.ImproveCacheLocality | PostProcessSteps.CalculateTangentSpace );
 
-            ProcessMaterials( scene, Path.GetDirectoryName( model )+ "\\" );
-            ProcessNode( scene.RootNode, scene );
+            var sceneData = CreateSceneData( scene, model );
 
             string fileNameWithoutExtension = Path.GetFileNameWithoutExtension( model );
             string outputFilename           = directory + "\\" + fileNameWithoutExtension + ".bmf";
             Console.WriteLine( "OutputFile: "                                             + outputFilename );
 
+            WriteSceneData( sceneData, outputFilename );
+        }
+
+        private static void WriteSceneData(SceneData sceneData, string outputFilename) {
             File.Delete( outputFilename );
             var fex = File.Open( outputFilename, FileMode.OpenOrCreate, FileAccess.ReadWrite );
-
-            using ( BinaryWriter br = new BinaryWriter( fex ) ) {
-                Console.WriteLine( "Writing bmf file..." );
-
-                Console.WriteLine( "Writing Materials:" );
-
-                // Materials
-                UInt64 numMaterials = (ulong) _materials.Count;
-                br.Write( numMaterials );
-
-                foreach ( Material material in _materials ) {
-                    br.Write( getBytes( material ) );
-
-                    const string pathPrefix           = "models/";
-                    UInt64       diffuesMapNameLength = 0;
-                    UInt64       normalMapNameLength  = 0;
-
-                    // Diffuse map
-                    {
-                        if ( !string.IsNullOrEmpty( material.diffuseMapName ) )
-                            diffuesMapNameLength = (UInt64) ( material.diffuseMapName.Length + pathPrefix.Length );
-                    }
-
-                    br.Write( diffuesMapNameLength );
-
-                    if ( diffuesMapNameLength > 0 ) {
-                        br.Write( Encoding.UTF8.GetBytes( pathPrefix + material.diffuseMapName ) );
-                        Console.WriteLine( pathPrefix + material.diffuseMapName );
-                    }
-
-                    // Normal map
-                    {
-                        if ( !string.IsNullOrEmpty( material.normalMapName ) )
-                            normalMapNameLength = (UInt64) ( material.normalMapName.Length + pathPrefix.Length );
-                    }
-
-                    br.Write( normalMapNameLength );
-
-                    if ( normalMapNameLength > 0 ) {
-                        br.Write( Encoding.UTF8.GetBytes( pathPrefix + material.normalMapName ) );
-                        Console.WriteLine( pathPrefix + material.normalMapName );
-                    }
-
-                    Console.WriteLine( "   - [" + ( hf++ ) + "/" + _materials.Count + "]: Material" );
-                }
-
-                hf = 1;
-                Console.WriteLine( "Writing Meshes : " );
-                // Meshes
-                UInt64 numMeshes = (UInt64) _meshes.Count;
-                br.Write( numMeshes );
-
-                foreach ( Mesh mesh in _meshes ) {
-                    UInt64 numVertices   = (UInt64) mesh.positions.Count;
-                    UInt64 numIndices    = (UInt64) mesh.indices.Count;
-                    UInt64 materialIndex = (UInt64) mesh.materialIndex;
-
-                    br.Write( materialIndex );
-                    br.Write( numVertices );
-                    br.Write( numIndices );
-
-                    for ( UInt64 i = 0; i < numVertices; i++ ) {
-                        br.Write( mesh.positions[(int) i].x );
-                        br.Write( mesh.positions[(int) i].y );
-                        br.Write( mesh.positions[(int) i].z );
-
-                        if ( mesh.normals.Count > (int) i ) {
-                            br.Write( mesh.normals[(int) i].x );
-                            br.Write( mesh.normals[(int) i].y );
-                            br.Write( mesh.normals[(int) i].z );
-                        }
-                        //else {
-                        //    br.Write( 0.0F );
-                        //    br.Write( 0.0F );
-                        //    br.Write( 0.0F );
-                        //}
-
-                        {
-                            if ( mesh.tangents.Count > (int) i ) {
-                                br.Write( mesh.tangents[(int) i].x );
-                                br.Write( mesh.tangents[(int) i].y );
-                                br.Write( mesh.tangents[(int) i].z );
-                            }
-
-                            //else {
-                            //    br.Write( 0.0F );
-                            //    br.Write( 0.0F );
-                            //    br.Write( 0.0F );
-                            //}
-                        }
-
-                        {
-                            if ( mesh.uvs.Count > (int) i ) {
-                                br.Write( mesh.uvs[(int) i].x );
-                                br.Write( mesh.uvs[(int) i].y );
-                            }
-
-                            //else {
-                            //    br.Write( 0.0F );
-                            //    br.Write( 0.0F );
-                            //}
-                        }
-                    }
-
-                    for ( UInt64 i = 0; i < numIndices; i++ ) {
-                        br.Write( mesh.indices[(int) i] );
-                    }
-
-                    Console.WriteLine( "   - [" + ( hf++ ) + "/" + _meshes.Count + "]: Mesh" );
-                }
-            }
-
+            var bf = new BinaryFormatter();
+            
+            bf.Serialize( fex, sceneData );
+            
             fex.Close();
             Console.WriteLine( "Finished!" );
             Console.ReadLine();
 
             _meshes.Clear();
             _materials.Clear();
+        }
+
+        private static SceneData CreateSceneData(Scene scene, string model) {
+            var mats  = ProcessMaterials( scene, Path.GetDirectoryName( model ) + "\\", TextureNotFoundCallback);
+            var nodes = ProcessNode( scene.RootNode, scene );
+
+            SceneData sceneData = SceneData.Converter(mats, nodes);
+
+            var ext = Path.GetExtension( model );
+
+            if ( ext == ".fbx" ) {
+               sceneData.TransFormMatrix *= Matrix4.CreateScale( .1f );
+            }
+
+
+            return sceneData;
+        }
+
+        private static string TextureNotFoundCallback(string arg1, string arg2) {
+            Console.WriteLine("TextureNotFound: " + arg1 );
+            Console.WriteLine("Location for search: " + arg2 );
+
+
+            OpenFileDialog o = new OpenFileDialog { Title = arg1, InitialDirectory = arg2 };
+
+            if ( o.ShowDialog() == DialogResult.OK ) {
+                return o.FileName;
+            }
+
+
+            return arg1;
         }
     }
 }

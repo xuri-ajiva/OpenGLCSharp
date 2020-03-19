@@ -43,7 +43,6 @@ namespace OpenGLCSharp {
             }
         }
 
-
         public class DrawEventArgs {
             public DrawEventArgs(Matrix4 matrix, ArrayBuffer objectBuffer, Shader shader) {
                 this.Matrix       = matrix;
